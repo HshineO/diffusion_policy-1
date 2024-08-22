@@ -163,9 +163,9 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                         leave=False, mininterval=cfg.training.tqdm_interval_sec) as tepoch:
                     t_estart = time.time()
                     for batch_idx, batch in enumerate(tepoch):
-                        if batch_idx == 0:
-                                t_bstart = time.time()
-                                print(f"load data time:{t_bstart-t_estart:.3f}")
+                        if batch_idx == 0 and cfg.training.debug == True:
+                            t_bstart = time.time()
+                            print(f"load data time:{t_bstart-t_estart:.3f}")
                         # device transfer
                         batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
                         if train_sampling_batch is None:
@@ -236,7 +236,7 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                                 leave=False, mininterval=cfg.training.tqdm_interval_sec) as tepoch:
                             t_estart = time.time()
                             for batch_idx, batch in enumerate(tepoch):
-                                if batch_idx == 0:
+                                if batch_idx == 0 and cfg.training.debug == True:
                                     t_bstart = time.time()
                                     print(f"load val data time:{t_bstart-t_estart:.3f}")
                                 batch = dict_apply(batch, lambda x: x.to(device, non_blocking=True))
