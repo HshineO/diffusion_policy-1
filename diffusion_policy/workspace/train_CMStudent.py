@@ -42,6 +42,8 @@ from diffusion_policy.workspace.base_workspace import BaseWorkspace
 from diffusion_policy.policy.diffusion_unet_image_policy import DiffusionUnetImagePolicy
 from diffusion_policy.policy.manicm_student_cm_policy import ManiCMStudentPolicy
 
+from diffusers.schedulers.scheduling_ddim import DDIMScheduler
+
 OmegaConf.register_new_resolver("eval", eval, replace=True)
 
 @torch.no_grad()
@@ -89,38 +91,38 @@ def predicted_origin(
 
     return pred_x_0
 
-class DDIMSolver:
-    def __init__(self, alpha_cumprods: np.ndarray, timesteps: int = 1000, ddim_timesteps: int = 50) -> None:
-        # DDIM sampling parameters
-        step_ratio = timesteps // ddim_timesteps
-        self.ddim_timesteps = (np.arange(1, ddim_timesteps + 1) * step_ratio).round().astype(np.int64) - 1
-        self.ddim_alpha_cumprods = alpha_cumprods[self.ddim_timesteps]
-        self.ddim_alpha_cumprods_prev = np.asarray(
-            [alpha_cumprods[0]] + alpha_cumprods[self.ddim_timesteps[:-1]].tolist()
-        )
-        # convert to torch tensors
-        self.ddim_timesteps = torch.from_numpy(self.ddim_timesteps).long()
-        self.ddim_alpha_cumprods = torch.from_numpy(self.ddim_alpha_cumprods)
-        self.ddim_alpha_cumprods_prev = torch.from_numpy(self.ddim_alpha_cumprods_prev)
+# class DDIMSolver:
+#     def __init__(self, alpha_cumprods: np.ndarray, timesteps: int = 1000, ddim_timesteps: int = 50) -> None:
+#         # DDIM sampling parameters
+#         step_ratio = timesteps // ddim_timesteps
+#         self.ddim_timesteps = (np.arange(1, ddim_timesteps + 1) * step_ratio).round().astype(np.int64) - 1
+#         self.ddim_alpha_cumprods = alpha_cumprods[self.ddim_timesteps]
+#         self.ddim_alpha_cumprods_prev = np.asarray(
+#             [alpha_cumprods[0]] + alpha_cumprods[self.ddim_timesteps[:-1]].tolist()
+#         )
+#         # convert to torch tensors
+#         self.ddim_timesteps = torch.from_numpy(self.ddim_timesteps).long()
+#         self.ddim_alpha_cumprods = torch.from_numpy(self.ddim_alpha_cumprods)
+#         self.ddim_alpha_cumprods_prev = torch.from_numpy(self.ddim_alpha_cumprods_prev)
 
-    def to(self, device: torch.device) -> "DDIMSolver":
-        self.ddim_timesteps = self.ddim_timesteps.to(device)
-        self.ddim_alpha_cumprods = self.ddim_alpha_cumprods.to(device)
-        self.ddim_alpha_cumprods_prev = self.ddim_alpha_cumprods_prev.to(device)
-        return self
+#     def to(self, device: torch.device) -> "DDIMSolver":
+#         self.ddim_timesteps = self.ddim_timesteps.to(device)
+#         self.ddim_alpha_cumprods = self.ddim_alpha_cumprods.to(device)
+#         self.ddim_alpha_cumprods_prev = self.ddim_alpha_cumprods_prev.to(device)
+#         return self
 
-    def ddim_step(self, pred_x0: torch.Tensor, pred_noise: torch.Tensor,
-                  timestep_index: torch.Tensor) -> torch.Tensor:
-        alpha_cumprod_prev = extract_into_tensor(self.ddim_alpha_cumprods_prev, timestep_index, pred_x0.shape)
-        dir_xt = (1.0 - alpha_cumprod_prev).sqrt() * pred_noise
-        x_prev = alpha_cumprod_prev.sqrt() * pred_x0 + dir_xt
-        return x_prev
+#     def ddim_step(self, pred_x0: torch.Tensor, pred_noise: torch.Tensor,
+#                   timestep_index: torch.Tensor) -> torch.Tensor:
+#         alpha_cumprod_prev = extract_into_tensor(self.ddim_alpha_cumprods_prev, timestep_index, pred_x0.shape)
+#         dir_xt = (1.0 - alpha_cumprod_prev).sqrt() * pred_noise
+#         x_prev = alpha_cumprod_prev.sqrt() * pred_x0 + dir_xt
+#         return x_prev
 
 class TrainStudentWorkspace(BaseWorkspace):
     include_keys = ['global_step', 'epoch']
     exclude_keys = tuple()
 
-    def __init__(self, cfg: OmegaConf, output_dir=None):
+    def __init__(self,cfg: OmegaConf, output_dir=None):
         self.cfg = cfg
         self._output_dir = output_dir
         self._saving_thread = None
@@ -199,11 +201,17 @@ class TrainStudentWorkspace(BaseWorkspace):
         alpha_schedule = torch.sqrt(noise_scheduler.alphas_cumprod)
         sigma_schedule = torch.sqrt(1 - noise_scheduler.alphas_cumprod)
 
-        solver = DDIMSolver(
-            noise_scheduler.alphas_cumprod.numpy(),
-            timesteps=noise_scheduler.config.num_train_timesteps,
-            ddim_timesteps=cfg.policy.num_inference_steps,
-        )
+        # solver = DDIMSolver(
+        #     noise_scheduler.alphas_cumprod.numpy(),
+        #     timesteps=noise_scheduler.config.num_train_timesteps,
+        #     ddim_timesteps=cfg.policy.num_inference_steps,
+        # )
+
+        # Teacher DDIM Solver
+        solver = copy.deepcopy(self.model.noise_scheduler)
+
+        print(type(self.model.noise_scheduler))
+
 
         encoder = self.model.obs_encoder
         teacher_unet = self.model.model
@@ -267,9 +275,9 @@ class TrainStudentWorkspace(BaseWorkspace):
         normalizer.requires_grad_(False)
 
         # Also move the alpha and sigma noise schedules to device
-        alpha_schedule = alpha_schedule.to(device)
-        sigma_schedule = sigma_schedule.to(device)
-        solver = solver.to(device)
+        # alpha_schedule = alpha_schedule.to(device)
+        # sigma_schedule = sigma_schedule.to(device)
+        # solver = solver.to(device)
 
         optimizer = torch.optim.AdamW(
             # itertools.chain(unet.parameters(), self.model.condition_attention.parameters()),
@@ -324,7 +332,6 @@ class TrainStudentWorkspace(BaseWorkspace):
             {
                 "output_dir": self.output_dir,
             },
-            # allow_val_change=True
         )
 
         
@@ -414,7 +421,10 @@ class TrainStudentWorkspace(BaseWorkspace):
                         # Sample a random timestep for each image t_n ~ U[0, N - k - 1] without bias.
                         topk = noise_scheduler.config.num_train_timesteps // cfg.policy.num_inference_steps
                         index = torch.randint(0, cfg.policy.num_inference_steps, (batch_size,), device=device).long()
-                        start_timesteps = solver.ddim_timesteps[index]
+
+                        solver.set_timesteps(self.model.num_inference_steps,device)
+
+                        start_timesteps = solver.timesteps[index]
                         timesteps = start_timesteps - topk
                         timesteps = torch.where(timesteps < 0, torch.zeros_like(timesteps), timesteps)
 
@@ -449,15 +459,24 @@ class TrainStudentWorkspace(BaseWorkspace):
                                 local_cond=local_cond, 
                                 global_cond=global_cond)
                             
-                            cond_pred_x0 = predicted_origin(
-                                cond_teacher_output,
-                                start_timesteps,
-                                noisy_model_input,
-                                noise_scheduler.config.prediction_type,
-                                alpha_schedule,
-                                sigma_schedule)
-                            
-                            x_prev = solver.ddim_step(cond_pred_x0, cond_teacher_output, index)
+                            # t = solver.timesteps[index]
+                            # 3. compute previous image: x_t -> x_t-1
+
+                            # start_timesteps is [batch,1]
+                            x_prev = cond_teacher_output.clone().to(device)
+
+                            for i in range(x_prev.shape[0]):
+                                t = start_timesteps[i].item()
+                                x_prev[i] = solver.step(cond_teacher_output[i].unsqueeze(0), t, noisy_model_input[i].unsqueeze(0)).prev_sample
+                            # cond_pred_x0 = predicted_origin(
+                            #     cond_teacher_output,
+                            #     start_timesteps,
+                            #     noisy_model_input,
+                            #     noise_scheduler.config.prediction_type,
+                            #     alpha_schedule,
+                            #     sigma_schedule)
+
+                            # x_prev = solver.ddim_step(cond_pred_x0, cond_teacher_output, index)
                             
                         with torch.no_grad():
                             target_noise_pred = target_unet(
