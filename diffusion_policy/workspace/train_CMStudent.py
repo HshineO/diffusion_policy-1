@@ -123,6 +123,7 @@ class TrainStudentWorkspace(BaseWorkspace):
     exclude_keys = tuple()
 
     def __init__(self,cfg: OmegaConf, output_dir=None):
+        super().__init__(cfg, output_dir=output_dir)
         self.cfg = cfg
         self._output_dir = output_dir
         self._saving_thread = None
@@ -297,7 +298,7 @@ class TrainStudentWorkspace(BaseWorkspace):
         )
 
 
-        self._output_dir = cfg.output_dir
+        # self._output_dir = cfg.output_dir
 
         # configure env
         env_runner: BaseImageRunner
@@ -660,7 +661,7 @@ class TrainStudentWorkspace(BaseWorkspace):
         '../config'))
 )
 def main(cfg):
-    workspace = TrainStudentWorkspace(cfg,output_dir=cfg.output_dir)
+    workspace = TrainStudentWorkspace(cfg)
     workspace.run()
 
 if __name__ == "__main__":

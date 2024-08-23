@@ -121,7 +121,7 @@ val_dataloader:
   pin_memory: True
   persistent_workers: False
 
-output_dir: /home/clear/stochastic_consistency_policy/diffusion_policy_stanford/outputs/student_debug
+# output_dir: /home/clear/stochastic_consistency_policy/diffusion_policy_stanford/outputs/student_debug
 
 optimizer:
   _target_: torch.optim.AdamW
@@ -133,7 +133,7 @@ optimizer:
 training:
   device: "cuda:0"
   seed: 42
-  debug: True #False
+  debug: False #False
   resume: True
   lr_scheduler: cosine
   lr_warmup_steps: 500
@@ -154,10 +154,10 @@ training:
 logging:
   group: ${exp_name}
   id: null
-  mode: offline
-  name: CMStudent-debug
+  mode: online
+  name: CMStudent-newstep1
   project: ManiCM-CMStudent
-  resume: True #False
+  resume: False #False
   tags:
   - manicm
   - robomimic
@@ -167,7 +167,7 @@ checkpoint:
   topk:
     monitor_key: test_mean_score
     mode: max
-    k: 5
+    k: 10
     format_str: 'epoch={epoch:04d}-test_mean_score={test_mean_score:.3f}.ckpt'
   save_last_ckpt: True # this only saves when save_ckpt is True
   save_last_snapshot: False
