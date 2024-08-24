@@ -42,8 +42,10 @@ class StochasticConditionalUnet1D(nn.Module):
             nn.Mish(),
             nn.Linear(2048*4 , 2048),
         )
+        # previous noise information as local condition
+        local_cond_dim = 2048
 
-        cond_dim = dsed + 2048 #diffusion_timestep
+        cond_dim = dsed # + 2048 #diffusion_timestep
         if global_cond_dim is not None:
             cond_dim += global_cond_dim
 
@@ -157,15 +159,17 @@ class StochasticConditionalUnet1D(nn.Module):
         noise_encoder_input = noise_sequence.view(sample.shape[0],-1) # to a 1dim feature
         noise_feature = self.diffusion_noise_encoder(noise_encoder_input)
 
+        local_cond = noise_feature
         if global_cond is not None:
             global_feature = torch.cat([
-                global_feature, global_cond , noise_feature
+                global_feature, global_cond # , noise_feature
             ], axis=-1)
-        
+
         # encode local features
         h_local = list()
         if local_cond is not None:
-            local_cond = einops.rearrange(local_cond, 'b h t -> b t h')
+           #  local_cond = einops.rearrange(local_cond, 'b h t -> b t h')
+            local_cond = local_cond.unsqueeze(2) # fix to torch.Size([1024, 2048, 1])
             resnet, resnet2 = self.local_cond_encoder
             x = resnet(local_cond, global_feature)
             h_local.append(x)

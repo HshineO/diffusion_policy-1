@@ -138,7 +138,7 @@ training:
   resume: True
   lr_scheduler: cosine
   lr_warmup_steps: 500
-  num_epochs: 3000 # 3000
+  num_epochs: 3001 # 3000
   gradient_accumulate_every: 1
   use_ema: True
   rollout_every: 50 #200
@@ -160,7 +160,7 @@ logging:
   project: ManiCM-CMStudent
   resume: False #False
   tags:
-  - manicm
+  - noise-as-localcondition
   - robomimic
 
 checkpoint:

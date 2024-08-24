@@ -297,12 +297,29 @@ class TrainStudentWorkspace(BaseWorkspace):
             }
         unet.diffusion_step_encoder.load_state_dict(model_state_dict)
 
-        ## @todo:warmup from teacher
-        # model_state_dict = {
-        #      k[len('model.up_modules.'):]: v for k, v in teacher['state_dicts']['model'].items()
-        #     if k.startswith('model.up_modules.')
-        #     }
-        # unet.up_modules.load_state_dict(model_state_dict,strict=False)
+        # @todo:warmup from teacher
+        model_state_dict = {
+             k[len('model.up_modules.'):]: v for k, v in teacher['state_dicts']['model'].items()
+            if k.startswith('model.up_modules.')
+            }
+        unet.up_modules.load_state_dict(model_state_dict)
+        model_state_dict = {
+             k[len('model.mid_modules.'):]: v for k, v in teacher['state_dicts']['model'].items()
+            if k.startswith('model.mid_modules.')
+            }
+        unet.mid_modules.load_state_dict(model_state_dict)
+        model_state_dict = {
+             k[len('model.down_modules.'):]: v for k, v in teacher['state_dicts']['model'].items()
+            if k.startswith('model.down_modules.')
+            }
+        unet.down_modules.load_state_dict(model_state_dict)
+        # final_conv
+        model_state_dict = {
+             k[len('model.final_conv.'):]: v for k, v in teacher['state_dicts']['model'].items()
+            if k.startswith('model.final_conv.')
+            }
+        unet.final_conv.load_state_dict(model_state_dict)
+
 
         # unet.load_state_dict(teacher_unet.state_dict())
         target_unet = StochasticConditionalUnet1D(
