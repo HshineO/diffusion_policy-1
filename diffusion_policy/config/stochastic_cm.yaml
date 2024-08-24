@@ -134,7 +134,7 @@ optimizer:
 training:
   device: "cuda:0"
   seed: 42
-  debug: True #False
+  debug: False #False
   resume: True
   lr_scheduler: cosine
   lr_warmup_steps: 500
@@ -156,7 +156,7 @@ logging:
   group: ${exp_name}
   id: null
   mode: online
-  name: CMStudent-newstep1
+  name: Stochastic-ddpm700e0.92s
   project: ManiCM-CMStudent
   resume: False #False
   tags:

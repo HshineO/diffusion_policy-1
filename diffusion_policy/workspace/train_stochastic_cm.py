@@ -162,7 +162,7 @@ class TrainStudentWorkspace(BaseWorkspace):
     def run(self):
         cfg = copy.deepcopy(self.cfg)
         
-        if True : #cfg.training.debug:
+        if cfg.training.debug:
             cfg.training.num_epochs = 100
             cfg.training.max_train_steps = 10
             cfg.training.max_val_steps = 3
@@ -555,9 +555,9 @@ class TrainStudentWorkspace(BaseWorkspace):
                             sigma_schedule)
                         
                         model_pred = c_skip_start * noisy_model_input + c_out_start * pred_x_0
-
+                        
                         # target network
-                        # noise_squence = torch.zeros(x_prev.shape[0],self.model.num_inference_steps)
+                        noise_squence = torch.zeros([x_prev.shape[0],T,x_prev.shape[1],x_prev.shape[2]]).to(device)
                         with torch.no_grad():
                             target_noise_pred = target_unet(
                                 x_prev.float(),
