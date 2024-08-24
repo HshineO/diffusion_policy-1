@@ -35,14 +35,21 @@ from diffusion_policy.common.checkpoint_util import TopKCheckpointManager
 from diffusion_policy.common.pytorch_util import dict_apply, optimizer_to
 from diffusion_policy.model.diffusion.ema_model import EMAModel
 from diffusion_policy.model.common.lr_scheduler import get_scheduler
+
 from diffusion_policy.model.diffusion.conditional_unet1d import ConditionalUnet1D
+
+from diffusion_policy.model.diffusion.stochastic_conditional_unet1d import StochasticConditionalUnet1D
+from diffusion_policy.model.vision.multi_image_obs_encoder import MultiImageObsEncoder
+
 from diffusion_policy.common.json_logger import JsonLogger
 
 from diffusion_policy.workspace.base_workspace import BaseWorkspace
 from diffusion_policy.policy.diffusion_unet_image_policy import DiffusionUnetImagePolicy
-from diffusion_policy.policy.manicm_student_cm_policy import ManiCMStudentPolicy
+# from diffusion_policy.policy.manicm_student_cm_policy import ManiCMStudentPolicy
+from diffusion_policy.policy.stochastic_cm_policy import StochasticConsistencyPolicy
 
 from diffusers.schedulers.scheduling_ddim import DDIMScheduler
+from diffusion_policy.model.common.normalizer import LinearNormalizer
 
 OmegaConf.register_new_resolver("eval", eval, replace=True)
 
@@ -135,9 +142,9 @@ class TrainStudentWorkspace(BaseWorkspace):
         random.seed(seed)
 
         # configure model
-        self.model: ManiCMStudentPolicy = hydra.utils.instantiate(cfg.policy)
+        self.model: StochasticConsistencyPolicy = hydra.utils.instantiate(cfg.policy)
 
-        self.ema_model: ManiCMStudentPolicy = None
+        self.ema_model: StochasticConsistencyPolicy = None
         if cfg.training.use_ema:
             try:
                 self.ema_model = copy.deepcopy(self.model)
@@ -155,7 +162,7 @@ class TrainStudentWorkspace(BaseWorkspace):
     def run(self):
         cfg = copy.deepcopy(self.cfg)
         
-        if cfg.training.debug:
+        if True : #cfg.training.debug:
             cfg.training.num_epochs = 100
             cfg.training.max_train_steps = 10
             cfg.training.max_val_steps = 3
@@ -175,13 +182,13 @@ class TrainStudentWorkspace(BaseWorkspace):
         RUN_VALIDATION = True # False # reduce time cost
         
         # resume training
-        if cfg.training.resume:
-            lastest_ckpt_path = pathlib.Path(cfg.teacher_ckpt) # self.get_checkpoint_path()
-            if lastest_ckpt_path.is_file():
-                print(f"Resuming from checkpoint {lastest_ckpt_path}")
-                self.load_checkpoint(path=lastest_ckpt_path)
-        else:
-            raise ValueError(f"Training Must Have A Teacher Model !!!!!")
+        # if cfg.training.resume:
+        #     lastest_ckpt_path = pathlib.Path(cfg.teacher_ckpt) # self.get_checkpoint_path()
+        #     if lastest_ckpt_path.is_file():
+        #         print(f"Resuming from checkpoint {lastest_ckpt_path}")
+        #         self.load_checkpoint(path=lastest_ckpt_path)
+        # else:
+        #     raise ValueError(f"Training Must Have A Teacher Model !!!!!")
 
         # configure dataset
         dataset: BaseImageDataset
@@ -203,23 +210,40 @@ class TrainStudentWorkspace(BaseWorkspace):
         alpha_schedule = torch.sqrt(noise_scheduler.alphas_cumprod)
         sigma_schedule = torch.sqrt(1 - noise_scheduler.alphas_cumprod)
 
-        # solver = DDIMSolver(
-        #     noise_scheduler.alphas_cumprod.numpy(),
-        #     timesteps=noise_scheduler.config.num_train_timesteps,
-        #     ddim_timesteps=cfg.policy.num_inference_steps,
-        # )
-
         # Teacher DDIM Solver
         solver = copy.deepcopy(self.model.noise_scheduler)
 
         print(type(self.model.noise_scheduler))
 
+        ############## Load Teacher Model ###############
+
+        teacher_path = cfg.teacher_ckpt 
+        teacher = torch.load(teacher_path)
+
+        encoder_state_dict = {
+            k[len('obs_encoder.'):]: v for k, v in teacher['state_dicts']['model'].items()
+            if k.startswith('obs_encoder.')
+        }
+        self.model.obs_encoder.load_state_dict(encoder_state_dict)
+
+
+
+        # encoder = MultiImageObsEncoder(**cfg.policy.obs_encoder)
+        # encoder = torch.load(cfg.teacher_ckpt)
+        # print(encoder)
+
+        
 
         encoder = self.model.obs_encoder
-        teacher_unet = self.model.model
+        encoder.to(device)
+        # teacher_unet = self.model.model
+
+        # teacher_unet = 
+
+        # print(type(teacher_unet))
 
         encoder.requires_grad_(False)
-        teacher_unet.requires_grad_(False)
+        # teacher_unet.requires_grad_(False)
 
         # compute unet config
         # parse shapes
@@ -236,7 +260,7 @@ class TrainStudentWorkspace(BaseWorkspace):
             input_dim = action_dim
             global_cond_dim = obs_feature_dim * cfg.n_obs_steps
 
-        unet = ConditionalUnet1D(
+        teacher_unet = ConditionalUnet1D(
             input_dim=input_dim,
             local_cond_dim=None,
             global_cond_dim=global_cond_dim,
@@ -246,18 +270,57 @@ class TrainStudentWorkspace(BaseWorkspace):
             n_groups=cfg.policy.n_groups,
             cond_predict_scale=cfg.policy.cond_predict_scale
         )
-        unet.load_state_dict(teacher_unet.state_dict())
-        target_unet = ConditionalUnet1D(
+
+        model_state_dict = {
+            k[len('model.'):]: v for k, v in teacher['state_dicts']['model'].items()
+                if k.startswith('model.')
+            }       
+
+        teacher_unet.load_state_dict(model_state_dict)
+        teacher_unet.requires_grad_(False)
+
+        unet = StochasticConditionalUnet1D(
             input_dim=input_dim,
             local_cond_dim=None,
             global_cond_dim=global_cond_dim,
-            diffusion_step_embed_dim=cfg.policy.diffusion_step_embed_dim,
+            diffusion_step_embed_dim=cfg.policy.diffusion_step_embed_dim ,
+            # diffusion_timestep=cfg.policy.diffusion_timestep * cfg.horizon * cfg.shape_meta.action.shape,
+            diffusion_timestep=cfg.policy.diffusion_timestep * 16 * 10,
             down_dims=cfg.policy.down_dims,
             kernel_size=cfg.policy.kernel_size,
             n_groups=cfg.policy.n_groups,
             cond_predict_scale=cfg.policy.cond_predict_scale
         )
-        target_unet.load_state_dict(teacher_unet.state_dict())
+        model_state_dict = {
+             k[len('model.diffusion_step_encoder.'):]: v for k, v in teacher['state_dicts']['model'].items()
+            if k.startswith('model.diffusion_step_encoder.')
+            }
+        unet.diffusion_step_encoder.load_state_dict(model_state_dict)
+
+        ## @todo:warmup from teacher
+        # model_state_dict = {
+        #      k[len('model.up_modules.'):]: v for k, v in teacher['state_dicts']['model'].items()
+        #     if k.startswith('model.up_modules.')
+        #     }
+        # unet.up_modules.load_state_dict(model_state_dict,strict=False)
+
+        # unet.load_state_dict(teacher_unet.state_dict())
+        target_unet = StochasticConditionalUnet1D(
+            input_dim=input_dim,
+            local_cond_dim=None,
+            global_cond_dim=global_cond_dim,
+            diffusion_step_embed_dim=cfg.policy.diffusion_step_embed_dim,
+            diffusion_timestep=cfg.policy.diffusion_timestep* 16 * 10,
+            down_dims=cfg.policy.down_dims,
+            kernel_size=cfg.policy.kernel_size,
+            n_groups=cfg.policy.n_groups,
+            cond_predict_scale=cfg.policy.cond_predict_scale
+        )
+        model_state_dict = {
+             k[len('model.diffusion_step_encoder.'):]: v for k, v in teacher['state_dicts']['model'].items()
+            if k.startswith('model.diffusion_step_encoder.')
+            }
+        target_unet.diffusion_step_encoder.load_state_dict(model_state_dict)
 
         # unet = ConditionalUnet1D(*self.model.unet_config)
         # unet.load_state_dict(teacher_unet.state_dict())
@@ -268,13 +331,24 @@ class TrainStudentWorkspace(BaseWorkspace):
         unet = unet.to(device)
         target_unet = target_unet.to(device)
         target_unet.requires_grad_(False)
+        encoder.to(device)
 
         # 没有mask
         # mask_generator = self.model.mask_generator
         # mask_generator.requires_grad_(False)
 
-        normalizer = self.model.normalizer
+        normalizer = LinearNormalizer() #self.model.normalizer
+        model_state_dict = {
+            k[len('normalizer.'):]: v for k, v in teacher['state_dicts']['model'].items()
+            if k.startswith('normalizer.')
+        }
+        normalizer.load_state_dict(model_state_dict)
         normalizer.requires_grad_(False)
+        normalizer.to(device)
+
+        self.model.normalizer = normalizer
+
+        teacher_unet.to(device)
 
         # Also move the alpha and sigma noise schedules to device
         # alpha_schedule = alpha_schedule.to(device)
@@ -438,9 +512,37 @@ class TrainStudentWorkspace(BaseWorkspace):
 
                         noisy_model_input = noise_scheduler.add_noise(latents, noise, start_timesteps)
 
+                        # teacher network
+                        with torch.no_grad():
+                            cond_teacher_output = teacher_unet(
+                                sample=noisy_model_input, 
+                                timestep=start_timesteps, 
+                                local_cond=local_cond, 
+                                global_cond=global_cond)
+                            
+                            # t = solver.timesteps[index]
+                            # 3. compute previous image: x_t -> x_t-1
+                            # start_timesteps is [batch,1]
+                            x_prev = cond_teacher_output.clone().to(device) # batch * horizon * action_dim
+                            # noise_squence = torch.zeros_like(cond_teacher_output).to(device)
+                            T = self.model.num_inference_steps
+                            noise_squence = torch.zeros([x_prev.shape[0],T,x_prev.shape[1],x_prev.shape[2]]).to(device) # batch * T * horizon * action_dim
+
+                            # print(x_prev.shape)
+                            # print(noise_squence.shape)
+
+                            for i in range(x_prev.shape[0]):
+                                t = start_timesteps[i].item()
+                                ddpm_output = solver.step(cond_teacher_output[i].unsqueeze(0), t, noisy_model_input[i].unsqueeze(0))
+                                x_prev[i] = ddpm_output.prev_sample
+                                # print("noise:",ddpm_output.add_noise)
+                                noise_squence[i][t] = ddpm_output.add_noise
+
+                        # online network
                         noise_pred = unet(
                             sample=noisy_model_input, 
                             timestep=start_timesteps, 
+                            noise_sequence = noise_squence,
                             local_cond=local_cond, 
                             global_cond=global_cond)
 
@@ -454,36 +556,13 @@ class TrainStudentWorkspace(BaseWorkspace):
                         
                         model_pred = c_skip_start * noisy_model_input + c_out_start * pred_x_0
 
-                        with torch.no_grad():
-                            cond_teacher_output = teacher_unet(
-                                sample=noisy_model_input, 
-                                timestep=start_timesteps, 
-                                local_cond=local_cond, 
-                                global_cond=global_cond)
-                            
-                            # t = solver.timesteps[index]
-                            # 3. compute previous image: x_t -> x_t-1
-
-                            # start_timesteps is [batch,1]
-                            x_prev = cond_teacher_output.clone().to(device)
-
-                            for i in range(x_prev.shape[0]):
-                                t = start_timesteps[i].item()
-                                x_prev[i] = solver.step(cond_teacher_output[i].unsqueeze(0), t, noisy_model_input[i].unsqueeze(0)).prev_sample
-                            # cond_pred_x0 = predicted_origin(
-                            #     cond_teacher_output,
-                            #     start_timesteps,
-                            #     noisy_model_input,
-                            #     noise_scheduler.config.prediction_type,
-                            #     alpha_schedule,
-                            #     sigma_schedule)
-
-                            # x_prev = solver.ddim_step(cond_pred_x0, cond_teacher_output, index)
-                            
+                        # target network
+                        # noise_squence = torch.zeros(x_prev.shape[0],self.model.num_inference_steps)
                         with torch.no_grad():
                             target_noise_pred = target_unet(
                                 x_prev.float(),
                                 timesteps,
+                                noise_sequence = noise_squence,
                                 local_cond=local_cond, 
                                 global_cond=global_cond)
                             pred_x_0 = predicted_origin(

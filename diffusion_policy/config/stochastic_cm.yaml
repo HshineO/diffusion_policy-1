@@ -1,7 +1,7 @@
 defaults:
   - task: square_image_abs
 
-name: train_cm_student
+name: train_stochastc_cm
 
 task_name: ${task.name}
 shape_meta: ${task.shape_meta}
@@ -17,35 +17,36 @@ obs_as_global_cond: Trued
 use_consistency_model: True
 past_action_visible: False
 
-teacher_ckpt: /home/clear/stochastic_consistency_policy/diffusion_policy_stanford/useful_chckpoint/DDIM/epoch=0900-test_mean_score=0.860.ckpt
+teacher_ckpt: /home/clear/stochastic_consistency_policy/diffusion_policy_stanford/useful_chckpoint/DDPM/epoch=0700-test_mean_score=0.920.ckpt
 
 policy:
-  _target_: diffusion_policy.policy.manicm_student_cm_policy.ManiCMStudentPolicy
-  teacher_path: /home/clear/stochastic_consistency_policy/diffusion_policy_stanford/useful_chckpoint/DDIM/epoch=0900-test_mean_score=0.860.ckpt
+  _target_: diffusion_policy.policy.stochastic_cm_policy.StochasticConsistencyPolicy
+  teacher_path: /home/clear/stochastic_consistency_policy/diffusion_policy_stanford/useful_chckpoint/DDPM/epoch=0700-test_mean_score=0.920.ckpt
   shape_meta: ${shape_meta}
+  diffusion_timestep: 100
   
-  # noise_scheduler:
-  #   _target_: diffusers.schedulers.scheduling_ddpm.DDPMScheduler
-  #   num_train_timesteps: 100
-  #   beta_start: 0.0001
-  #   beta_end: 0.02
-  #   beta_schedule: squaredcos_cap_v2
-  #   variance_type: fixed_small # Yilun's paper uses fixed_small_log instead, but easy to cause Nan
-  #   clip_sample: True # required when predict_epsilon=False
-  #   prediction_type: sample # or epsilon
-
   noise_scheduler:
-    _target_: diffusers.schedulers.scheduling_ddim.DDIMScheduler
+    _target_: diffusers.schedulers.scheduling_ddpm.DDPMScheduler
     num_train_timesteps: 100
     beta_start: 0.0001
     beta_end: 0.02
-    # beta_schedule is important
-    # this is the best we found
     beta_schedule: squaredcos_cap_v2
-    clip_sample: True
-    set_alpha_to_one: True
-    steps_offset: 0
+    variance_type: fixed_small # Yilun's paper uses fixed_small_log instead, but easy to cause Nan
+    clip_sample: True # required when predict_epsilon=False
     prediction_type: sample # or epsilon
+
+  # noise_scheduler:
+  #   _target_: diffusers.schedulers.scheduling_ddim.DDIMScheduler
+  #   num_train_timesteps: 100
+  #   beta_start: 0.0001
+  #   beta_end: 0.02
+  #   # beta_schedule is important
+  #   # this is the best we found
+  #   beta_schedule: squaredcos_cap_v2
+  #   clip_sample: True
+  #   set_alpha_to_one: True
+  #   steps_offset: 0
+  #   prediction_type: sample # or epsilon
 
   scheduler:
     _target_: diffusers.schedulers.scheduling_lcm.LCMScheduler
@@ -108,14 +109,14 @@ ema:
   max_value: 0.9999
 
 dataloader:
-  batch_size: 1024 #128 #4096
+  batch_size: 1024 #1024 #128 #4096
   num_workers: 32 #100
   shuffle: True
   pin_memory: True
   persistent_workers: False
 
 val_dataloader:
-  batch_size: 1024 #128 # 4096
+  batch_size: 1024 #1024 #128 # 4096
   num_workers: 32 #100
   shuffle: False
   pin_memory: True
