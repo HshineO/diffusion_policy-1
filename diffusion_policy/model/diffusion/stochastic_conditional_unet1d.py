@@ -19,7 +19,8 @@ class StochasticConditionalUnet1D(nn.Module):
         local_cond_dim=None,
         global_cond_dim=None,
         diffusion_step_embed_dim=256,  # time step
-        diffusion_timestep = 100,      # diffusion total step
+        diffusion_noise_embed_input_dim = 100*16*8,      # diffusion total step
+        diffusion_noise_embed_output_dim = 2048,
         down_dims=[256,512,1024],
         kernel_size=3,
         n_groups=8,
@@ -38,12 +39,12 @@ class StochasticConditionalUnet1D(nn.Module):
         )
         # encode previous noise
         diffusion_noise_encoder = nn.Sequential(
-            nn.Linear(diffusion_timestep , 2048*4),
+            nn.Linear(diffusion_noise_embed_input_dim , diffusion_noise_embed_output_dim*4),
             nn.Mish(),
-            nn.Linear(2048*4 , 2048),
+            nn.Linear(diffusion_noise_embed_output_dim*4 , diffusion_noise_embed_output_dim),
         )
         # previous noise information as local condition
-        local_cond_dim = 2048
+        local_cond_dim = diffusion_noise_embed_output_dim
 
         cond_dim = dsed # + 2048 #diffusion_timestep
         if global_cond_dim is not None:
