@@ -1,8 +1,8 @@
 defaults:
   - task: square_image_abs
 
-name: train_stochastc_cm
-_target_: diffusion_policy.workspace.train_stochastic_cm_workspace.TrainStochasticCMWorkspace
+name: train_determinate_cp
+_target_: diffusion_policy.workspace.train_determinate_cp_workspace.TrainDeterminateCPWorkspace
 
 task_name: ${task.name}
 shape_meta: ${task.shape_meta}
@@ -18,36 +18,38 @@ obs_as_global_cond: Trued
 use_consistency_model: True
 past_action_visible: False
 
-teacher_ckpt: /home/clear/stochastic_consistency_policy/diffusion_policy_stanford/useful_chckpoint/DDPM/epoch=0700-test_mean_score=0.920.ckpt
+teacher_ckpt: /home/clear/stochastic_consistency_policy/diffusion_policy_stanford/useful_chckpoint/DDIM/epoch=0900-test_mean_score=0.860.ckpt
+# /home/clear/stochastic_consistency_policy/diffusion_policy_stanford/useful_chckpoint/DDPM/epoch=0700-test_mean_score=0.920.ckpt
 
 policy:
-  _target_: diffusion_policy.policy.stochastic_cm_policy.StochasticConsistencyPolicy
-  teacher_path: /home/clear/stochastic_consistency_policy/diffusion_policy_stanford/useful_chckpoint/DDPM/epoch=0700-test_mean_score=0.920.ckpt
+  _target_: diffusion_policy.policy.determinate_cm_policy.DeterminateConsistencyPolicy
+  teacher_path: /home/clear/stochastic_consistency_policy/diffusion_policy_stanford/useful_chckpoint/DDIM/epoch=0900-test_mean_score=0.860.ckpt
+  # /home/clear/stochastic_consistency_policy/diffusion_policy_stanford/useful_chckpoint/DDPM/epoch=0700-test_mean_score=0.920.ckpt
   shape_meta: ${shape_meta}
   diffusion_timestep: 100
   
+  # noise_scheduler:
+    # _target_: diffusers.schedulers.scheduling_ddpm.DDPMScheduler
+    # num_train_timesteps: 100
+    # beta_start: 0.0001
+    # beta_end: 0.02
+    # beta_schedule: squaredcos_cap_v2
+    # variance_type: fixed_small # Yilun's paper uses fixed_small_log instead, but easy to cause Nan
+    # clip_sample: True # required when predict_epsilon=False
+    # prediction_type: sample # or epsilon
+
   noise_scheduler:
-    _target_: diffusers.schedulers.scheduling_ddpm.DDPMScheduler
+    _target_: diffusers.schedulers.scheduling_ddim.DDIMScheduler
     num_train_timesteps: 100
     beta_start: 0.0001
     beta_end: 0.02
+    # beta_schedule is important
+    # this is the best we found
     beta_schedule: squaredcos_cap_v2
-    variance_type: fixed_small # Yilun's paper uses fixed_small_log instead, but easy to cause Nan
-    clip_sample: True # required when predict_epsilon=False
+    clip_sample: True
+    set_alpha_to_one: True
+    steps_offset: 0
     prediction_type: sample # or epsilon
-
-  # noise_scheduler:
-  #   _target_: diffusers.schedulers.scheduling_ddim.DDIMScheduler
-  #   num_train_timesteps: 100
-  #   beta_start: 0.0001
-  #   beta_end: 0.02
-  #   # beta_schedule is important
-  #   # this is the best we found
-  #   beta_schedule: squaredcos_cap_v2
-  #   clip_sample: True
-  #   set_alpha_to_one: True
-  #   steps_offset: 0
-  #   prediction_type: sample # or epsilon
 
   scheduler:
     _target_: diffusers.schedulers.scheduling_lcm.LCMScheduler
@@ -136,7 +138,7 @@ training:
   device: "cuda:0"
   seed: 42
   debug: False #False
-  resume: True
+  resume: False #True
   lr_scheduler: cosine
   lr_warmup_steps: 500
   num_epochs: 3001 # 3000
@@ -157,11 +159,11 @@ logging:
   group: ${exp_name}
   id: null
   mode: online
-  name: Stochastic-ddpm700e0.92s
+  name: DCP-newcodetest
   project: ManiCM-CMStudent
   resume: False #False
   tags:
-  - noise-as-localcondition
+  - newcode
   - robomimic
 
 checkpoint:

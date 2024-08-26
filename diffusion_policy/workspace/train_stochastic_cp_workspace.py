@@ -49,7 +49,7 @@ def update_ema(target_params: Generator, source_params: Generator, rate: float =
     for tgt, src in zip(target_params, source_params):
         tgt.detach().mul_(rate).add_(src, alpha=1 - rate)
 
-class TrainStochasticCMWorkspace(BaseWorkspace):
+class TrainStochasticCPWorkspace(BaseWorkspace):
     include_keys = ['global_step', 'epoch']
     exclude_keys = tuple()
 
@@ -107,12 +107,12 @@ class TrainStochasticCMWorkspace(BaseWorkspace):
         
         # resume training
         if cfg.training.resume:
-            lastest_ckpt_path = pathlib.Path(cfg.teacher_ckpt) # self.get_checkpoint_path()
+            lastest_ckpt_path = self.get_checkpoint_path()
             if lastest_ckpt_path.is_file():
                 print(f"Resuming from checkpoint {lastest_ckpt_path}")
                 self.load_checkpoint(path=lastest_ckpt_path)
-        else:
-            raise ValueError(f"Training Must Have A Teacher Model !!!!!")
+        # else:
+        #     raise ValueError(f"Training Must Have A Teacher Model !!!!!")
 
         # configure dataset
         dataset: BaseImageDataset
@@ -390,7 +390,7 @@ class TrainStochasticCMWorkspace(BaseWorkspace):
         '../config'))
 )
 def main(cfg):
-    workspace = TrainStochasticCMWorkspace(cfg)
+    workspace = TrainStochasticCPWorkspace(cfg)
     workspace.run()
 
 if __name__ == "__main__":

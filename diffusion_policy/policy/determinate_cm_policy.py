@@ -4,13 +4,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange, reduce
 from diffusers.schedulers.scheduling_lcm import LCMScheduler  #DDPMScheduler
-from diffusers.schedulers.scheduling_ddpm import DDPMScheduler  #DDPMScheduler
+from diffusers.schedulers.scheduling_ddim import DDIMScheduler  #DDPMScheduler
 
 from diffusion_policy.model.common.normalizer import LinearNormalizer
 from diffusion_policy.policy.base_image_policy import BaseImagePolicy
 from diffusion_policy.model.diffusion.conditional_unet1d import ConditionalUnet1D
-
-from diffusion_policy.model.diffusion.stochastic_conditional_unet1d import StochasticConditionalUnet1D
 
 from diffusion_policy.model.diffusion.mask_generator import LowdimMaskGenerator
 from diffusion_policy.model.vision.multi_image_obs_encoder import MultiImageObsEncoder
@@ -18,10 +16,10 @@ from diffusion_policy.common.pytorch_util import dict_apply
 import re
 import copy
 
-class StochasticConsistencyPolicy(BaseImagePolicy):
+class DeterminateConsistencyPolicy(BaseImagePolicy):
     def __init__(self, 
             shape_meta: dict,
-            noise_scheduler: DDPMScheduler,
+            noise_scheduler: DDIMScheduler,
             scheduler: LCMScheduler,
             obs_encoder: MultiImageObsEncoder,
             horizon, 
@@ -29,10 +27,8 @@ class StochasticConsistencyPolicy(BaseImagePolicy):
             n_obs_steps,
             num_inference_timesteps = 1,
             num_inference_steps=None,
-            num_train_steps = 100,
             obs_as_global_cond=True,
             diffusion_step_embed_dim=256,
-            diffusion_noise_embed_output_dim=2048,
             down_dims=(256,512,1024),
             kernel_size=5,
             n_groups=8,
@@ -68,25 +64,25 @@ class StochasticConsistencyPolicy(BaseImagePolicy):
             cond_predict_scale=cond_predict_scale
         )
 
-        online_unet = StochasticConditionalUnet1D(
-            input_dim = input_dim, local_cond_dim=None,
+        online_unet = ConditionalUnet1D(
+            input_dim=input_dim,
+            local_cond_dim=None,
             global_cond_dim=global_cond_dim,
             diffusion_step_embed_dim=diffusion_step_embed_dim,
-            diffusion_noise_embed_input_dim = num_train_steps*horizon*n_action_steps,
-            diffusion_noise_embed_output_dim = diffusion_noise_embed_output_dim,
             down_dims=down_dims,
-            kernel_size=kernel_size,n_groups=n_groups,
+            kernel_size=kernel_size,
+            n_groups=n_groups,
             cond_predict_scale=cond_predict_scale
         )
 
-        target_unet = StochasticConditionalUnet1D(
-            input_dim = input_dim, local_cond_dim=None,
+        target_unet = ConditionalUnet1D(
+            input_dim=input_dim,
+            local_cond_dim=None,
             global_cond_dim=global_cond_dim,
             diffusion_step_embed_dim=diffusion_step_embed_dim,
-            diffusion_noise_embed_input_dim = num_train_steps*horizon*n_action_steps,
-            diffusion_noise_embed_output_dim = diffusion_noise_embed_output_dim,
             down_dims=down_dims,
-            kernel_size=kernel_size,n_groups=n_groups,
+            kernel_size=kernel_size,
+            n_groups=n_groups,
             cond_predict_scale=cond_predict_scale
         )
         
@@ -100,17 +96,12 @@ class StochasticConsistencyPolicy(BaseImagePolicy):
             state_dict_to_model(teacher_ckpt,pattern = r'obs_encoder\.'))
 
         # load online unet
-        online_unet.diffusion_step_encoder.load_state_dict(
-            state_dict_to_model(teacher_ckpt,pattern = r'model\.diffusion_step_encoder\.'))
-        online_unet.down_modules.load_state_dict(
-            state_dict_to_model(teacher_ckpt,pattern = r'model\.down_modules\.'))
-        online_unet.up_modules.load_state_dict(
-            state_dict_to_model(teacher_ckpt,pattern = r'model\.up_modules\.'))
-        online_unet.mid_modules.load_state_dict(
-            state_dict_to_model(teacher_ckpt,pattern = r'model\.mid_modules\.'))
-        online_unet.final_conv.load_state_dict(
-            state_dict_to_model(teacher_ckpt,pattern = r'model\.final_conv\.'))
-        
+        online_unet.load_state_dict(
+            state_dict_to_model(teacher_ckpt,pattern = r'model\.'))
+        # load target unet
+        target_unet.load_state_dict(
+            state_dict_to_model(teacher_ckpt,pattern = r'model\.'))
+
         obs_encoder.requires_grad_(False)
         teacher_unet.requires_grad_(False)
         target_unet.requires_grad_(False)
@@ -123,7 +114,7 @@ class StochasticConsistencyPolicy(BaseImagePolicy):
         self.noise_scheduler = noise_scheduler
         self.scheduler = scheduler
 
-        self.DDPMSolver = copy.deepcopy(noise_scheduler)
+        self.DDIMSolver = copy.deepcopy(noise_scheduler)
 
         self.mask_generator = LowdimMaskGenerator(
             action_dim=action_dim,
@@ -135,6 +126,8 @@ class StochasticConsistencyPolicy(BaseImagePolicy):
         self.normalizer = LinearNormalizer()
         self.normalizer.load_state_dict(
             state_dict_to_model(teacher_ckpt,pattern = r'normalizer\.'))
+        self.normalizer.requires_grad_(False)
+
         self.horizon = horizon
         self.obs_feature_dim = obs_feature_dim
         self.action_dim = action_dim
@@ -147,8 +140,6 @@ class StochasticConsistencyPolicy(BaseImagePolicy):
         if num_inference_steps is None:
             num_inference_steps = noise_scheduler.config.num_train_timesteps
         self.num_inference_steps = num_inference_steps
-
-        self.num_train_steps = num_train_steps
         
         # LCM step
         self.num_inference_timesteps = num_inference_timesteps
@@ -163,20 +154,7 @@ class StochasticConsistencyPolicy(BaseImagePolicy):
             # keyword arguments to scheduler.step
             **kwargs
             ):
-        # scheduler = self.noise_scheduler
         
-
-        # get DDPM previous Noise
-        ddpm = self.noise_scheduler
-        ddpm.set_timesteps(self.num_inference_steps)
-
-        # previous_noise = torch.zeros(condition_data.shape[0],self.num_train_steps)
-        T = self.num_inference_steps
-        previous_noise = torch.zeros([condition_data.shape[0],T,self.horizon,self.action_dim]).to(self.device) 
-        # batch * T * horizon * action_dim
-
-        previous_noise = ddpm.get_variance_sequence(previous_noise.shape).to(self.device)
-
         # get gaussion noise x_T
         trajectory = torch.randn(
             size=condition_data.shape, 
@@ -199,7 +177,6 @@ class StochasticConsistencyPolicy(BaseImagePolicy):
             noise_pred = self.model(
                 sample=latent_model_input,
                 timestep=t,
-                noise_sequence = previous_noise,
                 local_cond=local_cond,
                 global_cond=global_cond)
 
@@ -321,9 +298,9 @@ class StochasticConsistencyPolicy(BaseImagePolicy):
         topk = self.noise_scheduler.config.num_train_timesteps // self.num_inference_steps
         index = torch.randint(0, self.num_inference_steps, (batch_size,), device=trajectory.device).long()
         
-        self.DDPMSolver.set_timesteps(self.num_inference_steps,self.device)
+        self.DDIMSolver.set_timesteps(self.num_inference_steps,self.device)
 
-        start_timesteps = self.DDPMSolver.timesteps[index]
+        start_timesteps = self.DDIMSolver.timesteps[index]
         timesteps = start_timesteps - topk
         timesteps = torch.where(timesteps < 0, torch.zeros_like(timesteps), timesteps)
 
@@ -347,22 +324,16 @@ class StochasticConsistencyPolicy(BaseImagePolicy):
             # 3. compute previous image: x_t -> x_t-1
             # start_timesteps is [batch,1]
             x_prev = cond_teacher_output.clone().to(self.device) # batch * horizon * action_dim
-                            # noise_squence = torch.zeros_like(cond_teacher_output).to(device)
-            T = self.model.num_inference_steps
-            noise_squence = torch.zeros([x_prev.shape[0],T,x_prev.shape[1],x_prev.shape[2]]).to(self.device) # batch * T * horizon * action_dim
 
             for i in range(x_prev.shape[0]):
                 t = start_timesteps[i].item()
-                ddpm_output = self.DDPMSolver.step(cond_teacher_output[i].unsqueeze(0), t, noisy_model_input[i].unsqueeze(0))
-                x_prev[i] = ddpm_output.prev_sample
-                # print("noise:",ddpm_output.add_noise)
-                noise_squence[i][t] = ddpm_output.add_noise       
+                ddim_output = self.DDIMSolver.step(cond_teacher_output[i].unsqueeze(0), t, noisy_model_input[i].unsqueeze(0))
+                x_prev[i] = ddim_output.prev_sample   
 
         # online network
         noise_pred = self.model(
                             sample=noisy_model_input, 
                             timestep=start_timesteps, 
-                            noise_sequence = noise_squence,
                             local_cond=local_cond, 
                             global_cond=global_cond)
         pred_x_0 = predicted_origin(
@@ -376,12 +347,10 @@ class StochasticConsistencyPolicy(BaseImagePolicy):
         model_pred = c_skip_start * noisy_model_input + c_out_start * pred_x_0
 
         # target network
-        noise_squence = torch.zeros([x_prev.shape[0],T,x_prev.shape[1],x_prev.shape[2]]).to(self.device)
         with torch.no_grad():
             target_noise_pred = self.target_unet(
                                 x_prev.float(),
                                 timesteps,
-                                noise_sequence = noise_squence,
                                 local_cond=local_cond, 
                                 global_cond=global_cond)
             pred_x_0 = predicted_origin(
@@ -449,14 +418,8 @@ class StochasticConsistencyPolicy(BaseImagePolicy):
         # apply conditioning
         noisy_trajectory[condition_mask] = cond_data[condition_mask]
 
-        T = self.num_inference_steps
-        previous_noise = torch.zeros([noisy_trajectory.shape[0],T,self.horizon,self.action_dim]).to(self.device) 
-        # batch * T * horizon * action_dim
-
-        previous_noise = self.noise_scheduler.get_variance_sequence(previous_noise.shape).to(self.device)
-        
         # Predict the noise residual
-        pred = self.model(noisy_trajectory, timesteps, previous_noise,
+        pred = self.model(noisy_trajectory, timesteps,
             local_cond=local_cond, global_cond=global_cond)
 
         pred_type = self.noise_scheduler.config.prediction_type 
